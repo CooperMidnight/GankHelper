@@ -1,0 +1,39 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <LangVersion>latest</LangVersion>
+        <TargetFramework>net10.0</TargetFramework>
+        <Nullable>enable</Nullable>
+        <ImplicitUsings>disable</ImplicitUsings>
+        <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+        <WarningLevel>9999</WarningLevel>
+        <AnalysisLevel>latest</AnalysisLevel>
+        <AnalysisMode>Recommended</AnalysisMode>
+
+        <!--
+            CA1848: Use logger message delegates
+            CA1859: Use concrete types whenever possible
+            CA1863: CompositeFormat 
+            CA1873: Evaluation of logging params
+        -->
+        <NoWarn>CA1848; CA1859; CA1863; CA1873;</NoWarn>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <PackageReference Include="CsvHelper" Version="33.1.0" />
+      <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.6" />
+      <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.6" />
+      <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.6" />
+      <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.6" />
+      <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.6" />
+      <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.6" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <None Update="appsettings.json">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      </None>
+    </ItemGroup>
+
+</Project>

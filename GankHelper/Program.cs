@@ -18,6 +18,7 @@ var provider = new ServiceCollection()
     .AddTransient<GetSalesCommand>()
     .AddTransient<ReorderListingsCommand>()
     .AddTransient<CacheHelper>()
+    .AddTransient<GankClient>()
     .AddLogging(b =>
     {
         _ = b

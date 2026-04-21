@@ -18,19 +18,9 @@ internal sealed class CacheHelper
 
     public async Task<List<JsonElement>> GetListingsAsync()
     {
-        const string cacheFilePath = "./Listings.cache";
-        
-        var result = new List<JsonElement>();
-        var loadedFromCache = false;
-        
-        if (File.Exists(cacheFilePath))
-        {
-            await using var input = File.OpenRead("./Listings.cache");
-            var nodes = await JsonSerializer.DeserializeAsync<List<JsonElement>>(input) ?? [];
-            result.AddRange(nodes);
-            loadedFromCache = true;
-        }
+        const string cacheFileName = "Listings.cache";
 
+        var (result, loadedFromCache) = await TryLoadFromCacheFileAsync(cacheFileName);
         var existingGankIds = result.Select(x => x.GetProperty("id").GetString()!).ToHashSet();
         // If there was already a cache file, then we probably don't need a page size of 50 to catch up with the latest listings.
         var pageSize = loadedFromCache ? 5 : 50;
@@ -43,27 +33,16 @@ internal sealed class CacheHelper
                 break;
             result.Add(listing);
         }
-        
-        await using var output = File.OpenWrite(cacheFilePath);
-        await JsonSerializer.SerializeAsync(output, result);
+
+        await WriteCacheFileAsync(result, cacheFileName);
         return result;
     }
 
     public async Task<List<JsonElement>> GetTransactionsAsync()
     {
-        const string cacheFilePath = "./Transactions.cache";
+        const string cacheFileName = "Transactions.cache";
 
-        var result = new List<JsonElement>();
-        var loadedFromCache = false;
-
-        if (File.Exists(cacheFilePath))
-        {
-            await using var input = File.OpenRead(cacheFilePath);
-            var nodes = await JsonSerializer.DeserializeAsync<List<JsonElement>>(input) ?? [];
-            result.AddRange(nodes);
-            loadedFromCache = true;
-        }
-
+        var (result, loadedFromCache) = await TryLoadFromCacheFileAsync(cacheFileName);
         var existingGankIds = result.Select(x => x.GetTransactionId()).ToHashSet();
         var pageSize = loadedFromCache ? 10 : 500;
         
@@ -74,9 +53,8 @@ internal sealed class CacheHelper
                 break;
             result.Add(listing);
         }
-        
-        await using var output = File.OpenWrite(cacheFilePath);
-        await JsonSerializer.SerializeAsync(output, result);
+
+        await WriteCacheFileAsync(result, cacheFileName);
         return result;
     }
     
@@ -95,5 +73,24 @@ internal sealed class CacheHelper
         await using var output = File.OpenWrite(cacheFilePath);
         await JsonSerializer.SerializeAsync(output, self);
         return self.GetProperty("id").GetString()!;
+    }
+
+    private static async Task<(List<JsonElement> Elements, bool LoadedFromCache)> TryLoadFromCacheFileAsync(string cacheFileName)
+    {
+        var cacheFilePath = Path.Combine(Directory.GetCurrentDirectory(), cacheFileName);
+
+        if (!File.Exists(cacheFilePath))
+            return ([], false);
+        
+        await using var input = File.OpenRead(cacheFilePath);
+        var elements = await JsonSerializer.DeserializeAsync<List<JsonElement>>(input) ?? [];
+        return (elements, true);
+    }
+
+    private static async Task WriteCacheFileAsync<T>(T data, string cacheFileName)
+    {
+        var cacheFilePath = Path.Combine(Directory.GetCurrentDirectory(), cacheFileName);
+        await using var output = File.OpenWrite(cacheFilePath);
+        await JsonSerializer.SerializeAsync(output, data);
     }
 }

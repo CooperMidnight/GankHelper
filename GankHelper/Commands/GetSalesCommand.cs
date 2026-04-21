@@ -3,137 +3,97 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
-using System.Net.Http;
-using System.Net.Http.Json;
-using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using CsvHelper;
 using GankHelper.Constants;
 using GankHelper.Extensions;
-using GankHelper.Models;
-using GankHelper.Options;
+using GankHelper.Helpers;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 
 namespace GankHelper.Commands;
 
 internal sealed class GetSalesCommand : CommandBase
 {
-    private const string UrlFormat = "https://api-v2.ganknow.com/payment/transactions?page={0}&per_page={1}&usecases_client=WALLET_GANK_EARNING_TX";
-    
-    private readonly IHttpClientFactory _clientFactory;
-    private readonly IOptions<GetSalesOptions> _options;
+    private readonly CacheHelper _cacheHelper;
     private readonly ILogger<GetSalesCommand> _logger;
 
-    public GetSalesCommand(IHttpClientFactory clientFactory, IOptions<GetSalesOptions> options, ILogger<GetSalesCommand> logger)
+    public GetSalesCommand(ILogger<GetSalesCommand> logger, CacheHelper cacheHelper)
     {
-        _clientFactory = clientFactory;
-        _options = options;
         _logger = logger;
+        _cacheHelper = cacheHelper;
     }
 
     public override async Task ExecuteAsync()
     {
-        var client = _clientFactory.GetGankClient();
-        var pageSize = _options.Value.PageSize;
-        var page = 0;
-        var earningsViaItems = 0;
-        var earningsViaTips = 0;
-        var withdrawnTotal = 0;
+        var earningsViaItems = 0m;
+        var earningsViaTips = 0m;
+        var withdrawnTotal = 0m;
         var listingInfo = new Dictionary<string, ListingInfo>();
-        var transactionIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var listings = (await _cacheHelper.GetListingsAsync()).ToDictionary(x => x.GetListingId());
+        var transactions = await _cacheHelper.GetTransactionsAsync();
+        var transactionIds = new HashSet<string>();
 
-        while (true)
+        foreach (var transaction in transactions)
         {
-            page++;
-            _logger.LogDebug("Getting page {Page}.", page);
-            
-            var response = await client.GetFromJsonAsync<ListResponse<Transaction>>(String.Format(null, UrlFormat, page, pageSize));
-
-            if (response is not { Data: { Count: > 0 } transactions })
+            if (!transactionIds.Add(transaction.GetTransactionId()))
             {
-                _logger.LogInformation("No more data.");
-                break;
+                _logger.LogDebug("Found duplicate transaction {Id}. Skipping.", transaction.GetTransactionId());
+                continue;
             }
 
-            foreach (var transaction in transactions)
+            var amountInDollars = Decimal.Parse(transaction.GetProperty("price").ToString(), CultureInfo.InvariantCulture);
+            var type = transaction.GetProperty("usecase").GetString()!;
+
+            switch (type)
             {
-                if (!transactionIds.Add(transaction.Id))
-                {
-                    // This can happen if someone buys an item while you're running this app.
-                    _logger.LogDebug("Found duplicate transaction {Id}. Skipping.", transaction.Id);
-                    continue;
-                }
-
-                var priceInDollars = (int)transaction.PriceInDollars;
-
-                switch (transaction.Type)
-                {
-                    case TransactionTypes.ProfileTip or TransactionTypes.PostTip:
-                        earningsViaTips += priceInDollars;
-                        break;
-                    case TransactionTypes.Withdrawal:
-                        withdrawnTotal += priceInDollars;
-                        break;
-                    case TransactionTypes.DigitalGoodsPurchase:
-                    {
-                        earningsViaItems += priceInDollars;
-                        var title = transaction.Usecase.Data.ItemTitle;
-                        var itemId = transaction.Usecase.Data.ItemId;
-
-                        listingInfo.AddOrUpdate(
-                            itemId,
-                            () => new ListingInfo(title, 1, priceInDollars),
-                            old => old with { SaleCount = old.SaleCount + 1, TotalEarnings = old.TotalEarnings + priceInDollars }
-                        );
-                        break;
-                    }
-                    default:
-                        _logger.LogWarning("Transaction type {Type} not implemented. Skipping.", transaction.Type);
-                        break;
-                }
+                case TransactionTypes.ProfileTip or TransactionTypes.PostTip:
+                    earningsViaTips += amountInDollars;
+                    break;
+                case TransactionTypes.Withdrawal:
+                    withdrawnTotal += amountInDollars;
+                    break;
+                case TransactionTypes.DigitalGoodsPurchase:
+                    earningsViaItems += amountInDollars;
+                    var usecaseData = transaction.GetProperty("usecase_data").GetProperty("data");
+                    var itemId = usecaseData.GetProperty("catalog_id").ToString()!;
+                    var itemName = listings.TryGetValue(itemId, out var existingListing)
+                        ? existingListing.GetListingName()
+                        : usecaseData.GetProperty("catalog_title").GetString()!;
+                    
+                    listingInfo.AddOrUpdate(
+                        itemId,
+                        () => new ListingInfo(itemId, itemName, 1, amountInDollars),
+                        old => old with { SaleCount = old.SaleCount + 1, TotalEarnings = old.TotalEarnings + amountInDollars }
+                    );
+                    break;
+                default:
+                    _logger.LogWarning("Transaction type {Type} not implemented. Skipping", type);
+                    break;
             }
         }
-        
+
         _logger.LogInformation("Done.");
         _logger.LogInformation("Earnings via digital items: {DigitalItemTotal}", earningsViaItems);
         _logger.LogInformation("Earnings via tips: {TipTotal}", earningsViaTips);
         _logger.LogInformation("Total withdrawn: {Withdrawn}", withdrawnTotal);
 
-        var dateComparer = Comparer<string>.Create(static (a, b) =>
-        {
-            var firstDate = TryGetDate(a);
-            var secondDate = TryGetDate(b);
-
-            return firstDate.HasValue && secondDate.HasValue
-                ? firstDate.Value.CompareTo(secondDate.Value)
-                : firstDate.HasValue
-                    ? 1
-                    : secondDate.HasValue
-                        ? -1
-                        : 0;
-        });
-
-        var listings = listingInfo.Values
-            .OrderByDescending(x => x.Name, dateComparer)
+        var ordered = listingInfo.Values
+            .OrderByDescending(x =>
+            {
+                return listings.TryGetValue(x.GankId, out var existingListing)
+                    ? existingListing.GetProperty("createdAt").GetDateTimeOffset()
+                    : DateTimeOffset.MinValue;
+            })
             .ThenBy(x => x.Name)
-            .ToList();
-
-        if (_options.Value.ShouldWriteToCsvFile)
-        {
-            await using var writer = new StreamWriter(_options.Value.CsvFilePath!);
-            await using var csv = new CsvWriter(writer, CultureInfo.InvariantCulture);
-            await csv.WriteRecordsAsync(listings);
-            _logger.LogInformation("Wrote data to {Path}", _options.Value.CsvFilePath);
-        }
+            .Select(x => new { x.Name, x.SaleCount, x.TotalEarnings })
+            .ToArray();
+        
+        var csvFilePath = Path.Combine("./", "earnings_" + DateTime.Now.ToString("yyyy_MM_dd_HHmmss", null) + ".csv");
+        await using var writer = new StreamWriter(csvFilePath);
+        await using var csv = new CsvWriter(writer, CultureInfo.InvariantCulture);
+        await csv.WriteRecordsAsync(ordered);
+        _logger.LogInformation("Wrote data to {Path}", csvFilePath);
     }
     
-    private sealed record ListingInfo(string Name, int SaleCount, int TotalEarnings);
-
-    private static int? TryGetDate(string input)
-    {
-        return Regex.Match(input, "[0-9]{6}") is { Success: true } match
-            ? Int32.Parse(match.Value, null)
-            : null;
-    }
+    private sealed record ListingInfo(string GankId, string Name, int SaleCount, decimal TotalEarnings);
 }

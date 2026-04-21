@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Net.Http.Headers;
 using GankHelper.Commands;
+using GankHelper.Helpers;
 using GankHelper.Options;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -12,11 +13,11 @@ var configuration = new ConfigurationBuilder()
     .Build();
 
 var provider = new ServiceCollection()
-    .Configure<GetSalesOptions>(configuration.GetRequiredSection("GetSales"))
     .Configure<ReorderListingsOptions>(configuration.GetRequiredSection("ReorderListings"))
     .Configure<GeneralOptions>(configuration.GetRequiredSection("General"))
     .AddTransient<GetSalesCommand>()
     .AddTransient<ReorderListingsCommand>()
+    .AddTransient<CacheHelper>()
     .AddLogging(b =>
     {
         _ = b
